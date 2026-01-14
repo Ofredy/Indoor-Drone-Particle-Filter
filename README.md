@@ -75,12 +75,11 @@ These results demonstrate fast and stable convergence in all position states, va
 The **two-beacon configuration** is the most important result of this project.
 
 In this case:
-- the system is **underdetermined geometrically** in a classical sense,
+- the system is **underdetermined geometrically** in a classical sense
 - but the particle filter is able to leverage:
-  - motion continuity,
-  - known indoor constraints,
-  - and probabilistic weighting
-to still converge.
+  - motion continuity
+  - known indoor constraints
+  - and probabilistic weighting to still converge
 
 ### Key Observation
 
@@ -126,9 +125,9 @@ This demonstrates that **particle filtering enables beacon reduction**, which is
 The **one-beacon configuration** was explored as an experimental extension.
 
 Despite attempts to exploit:
-- known indoor geometry,
-- motion constraints,
-- and probabilistic sampling,
+- known indoor geometry
+- motion constraints
+- and probabilistic sampling
 
 the particle filter **did not reliably converge** with only one beacon.
 
@@ -146,9 +145,9 @@ The Firefly-based implementation is preserved in the repository for potential fu
 
 One possible path forward would be to:
 - initialize the system from a **known state**
-  - e.g., drone always starting on the floor,
-  - directly in front of a beacon,
-- and allow the filter to converge from that constrained prior.
+  - e.g., drone always starting on the floor
+  - directly in front of a beacon
+- and allow the filter to converge from that constrained prior
 
 However, this was not implemented in the current work.
 
