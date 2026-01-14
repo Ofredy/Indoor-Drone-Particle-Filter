@@ -36,17 +36,18 @@ The key question explored is:
 The **three-beacon configuration** serves as the baseline case and the most observable setup.
 
 With three beacons:
-- the system is well constrained,
-- the particle filter converges quickly,
-- and all state components converge reliably.
+- the system is well constrained
+- the particle filter converges quickly
+- and all state components converge reliably
 
 ### Results
 
 From the repository root, results can be found at:
 
+'''
 sim/
 └── three_beacon_results/
-
+'''
 
 These results include:
 - State error plots for:
