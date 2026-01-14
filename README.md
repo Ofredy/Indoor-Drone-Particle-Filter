@@ -2,10 +2,12 @@
 
 This project was developed as a focused effort to **get up to speed with particle filters** and then **apply them to a practical indoor localization problem** that I have worked with in the past.
 
+It builds on my previous work with extended Kalman filters for state estimation, such as in the **Mars Rover 3D Tracker** project (see: https://github.com/Ofredy/Mars-Rover-3D-Tracker), where an EKF was used to estimate rover position in 3D space. That experience with probabilistic state estimation helped inform the design and evaluation of the particle filter approach used here.
+
 The core objective was to investigate whether a particle filter could be used to **reduce beacon dependency** for indoor drone state estimation by exploiting:
-- known indoor geometry,
-- motion constraints,
-- and probabilistic state estimation.
+- known indoor geometry
+- motion constraints
+- and probabilistic state estimation
 
 In particular, this work compares **three-beacon**, **two-beacon**, and **one-beacon** configurations, with the ultimate goal of determining how few beacons are required while still achieving reliable state convergence.
 
