@@ -88,15 +88,27 @@ to still converge.
 
 ### Results
 
-Results can be found at:
+#### Trajectory Visualization
 
-sim/
-└── two_beacon_results/
+![3D Trajectory](sim/two_beacon_results/trajectories.png)
 
+---
 
-Each simulation includes plots for:
-- \(x, y, z\) position error
-- \(\dot{x}, \dot{y}, \dot{z}\) velocity error
+### Position State Error
+
+The plots below show the position estimation error along each axis over time using the two-beacon configuration.
+
+#### X Position Error
+
+![X Position Error](sim/two_beacon_results/state_s0_errors.jpg)
+
+#### Y Position Error
+
+![Y Position Error](sim/two_beacon_results/state_s1_errors.jpg)
+
+#### Z Position Error
+
+![Z Position Error](sim/two_beacon_results/state_s2_errors.jpg)
 
 ### Analysis
 
