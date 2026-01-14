@@ -113,10 +113,10 @@ The plots below show the position estimation error along each axis over time usi
 
 - Position and velocity states **do converge**
 - Convergence time is longer than the three-beacon case
-- Variance remains higher early in the simulation
+- Variance remains higher early in the simulation, and sightly higher than the 3 beacon set up
 - Once enough motion information accumulates, particles collapse correctly
 
-This demonstrates that **particle filtering enables beacon reduction**, which is the primary success of this project.
+This demonstrates that **particle filtering enables beacon reduction**, while maintaining somewhat accurate results which is the primary success of this project.
 
 ---
 
