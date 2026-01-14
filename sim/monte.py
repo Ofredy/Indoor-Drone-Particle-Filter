@@ -17,9 +17,9 @@ import firefly_pf
 np.random.seed(69)
 
 # Monte Carlo
-NUM_MONTE_RUNS = 1
+NUM_MONTE_RUNS = 10
 
-sim_time = 50  # seconds
+sim_time = 100.0 # seconds
 sim_hz = 200   # integrator rate (dt = 1/simulation_hz)
 sim_dt = 1 / sim_hz
 
@@ -506,6 +506,217 @@ def plot_pf_weight_pdfs_vs_time(
         else:
             plt.close()
 
+def weighted_percentiles(values, weights, percentiles=[0.025, 0.5, 0.975]):
+    """
+    Compute weighted percentiles of a 1D sample.
+
+    Args:
+        values:      array-like, shape (N,)
+        weights:     array-like, shape (N,)  — weights must be >= 0
+        percentiles: list of percentiles in [0,1], e.g. [0.025, 0.5, 0.975]
+
+    Returns:
+        A list of percentile values in the same order as `percentiles`.
+    """
+    values  = np.asarray(values,  dtype=float)
+    weights = np.asarray(weights, dtype=float)
+
+    # Safety handling
+    if len(values) == 0:
+        return [np.nan for _ in percentiles]
+
+    # Replace invalid weights (negative, NaN, inf)
+    weights = np.where(np.isfinite(weights) & (weights >= 0), weights, 0.0)
+
+    # Normalize weights
+    w_sum = weights.sum()
+    if w_sum <= 0.0 or not np.isfinite(w_sum):
+        weights = np.ones_like(weights) / len(weights)
+    else:
+        weights = weights / w_sum
+
+    # Sort by value
+    idx = np.argsort(values)
+    v = values[idx]
+    w = weights[idx]
+
+    # Cumulative distribution
+    cw = np.cumsum(w)
+
+    # Extract percentiles
+    results = []
+    for p in percentiles:
+        # Ensure p is within valid bounds
+        p = max(0.0, min(1.0, p))
+        i = np.searchsorted(cw, p)
+        i = min(max(i, 0), len(v) - 1)
+        results.append(v[i])
+
+    return results
+
+def plot_pf_error_pdf_band_all_runs_about_estimate(
+    monte_data,
+    state_labels=None,
+    output_dir="sim_results",
+    dpi=150
+):
+    """
+    One plot per state:
+
+      - Shaded 3-sigma band for the *posterior error* (true - estimate),
+        approximated by particles around the PF estimate:
+
+            dev_p = x_particle - x_estimate
+
+        The band is derived from the PDF of dev_p at each time using ALL runs.
+
+      - All run errors (estimate - truth) plotted in black on top:
+
+            err_run = x_estimate - x_true
+
+      - No median line, just band + black error curves + zero line.
+
+    Expects:
+      monte_data["x_k"]        : (R, T_pf, S, Np)  particle states
+      monte_data["w_k"]        : (R, T_pf, Np)     particle weights
+      monte_data["x_estimate"] : (R, T_pf, S)      PF estimates
+      monte_data["state_sum"]  : (R, T_sim, S)     true states
+      monte_data["imu_hz"]     : scalar
+      monte_data["sim_hz"]     : scalar
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    x_k_all    = np.asarray(monte_data["x_k"])        # (R, T_pf, S, Np)
+    w_k_all    = np.asarray(monte_data["w_k"])        # (R, T_pf, Np)
+    x_est_all  = np.asarray(monte_data["x_estimate"]) # (R, T_pf, S)
+    x_true_all = np.asarray(monte_data["state_sum"])  # (R, T_sim, S)
+
+    R, T_pf, S, Np = x_k_all.shape
+    _, T_sim, _    = x_true_all.shape
+
+    imu_hz = monte_data.get("imu_hz", 50.0)
+    sim_hz = monte_data.get("sim_hz", 100.0)
+
+    # PF time axis
+    t_pf = np.arange(T_pf, dtype=float) / float(imu_hz)
+
+    # Align truth to PF timestamps (for errors)
+    sim_idx = np.clip(np.rint(t_pf * sim_hz).astype(int), 0, T_sim - 1)
+    x_true_pf = x_true_all[:, sim_idx, :]   # (R, T_pf, S)
+
+    # Labels
+    if state_labels is None:
+        state_labels = [f"s{i}" for i in range(S)]
+    elif len(state_labels) != S:
+        raise ValueError(f"state_labels length {len(state_labels)} != S {S}")
+
+    # 3-sigma equivalent percentiles for (true - estimate)
+    p_low  = 0.00135
+    p_high = 1.0 - p_low    # 0.99865
+
+    for s_idx in range(S):
+        label = state_labels[s_idx]
+
+        # ----------------------------
+        # Build time-varying 3-sigma band for dev = (true - estimate)
+        # approximated by particles around the estimate:
+        #
+        #   dev_p = x_particle - x_estimate
+        #
+        # using ALL runs at each time step.
+        # ----------------------------
+        low_band  = np.zeros(T_pf)
+        high_band = np.zeros(T_pf)
+
+        for t_idx in range(T_pf):
+            devs_t_list = []
+            w_t_list    = []
+
+            for r in range(R):
+                # Particle values and PF estimate at (r, t, s)
+                vals = x_k_all[r, t_idx, s_idx, :]       # (Np,)
+                est  = x_est_all[r, t_idx, s_idx]
+
+                # Deviation of particle from estimate: dev ≈ (true - estimate)
+                dev  = vals - est                        # (Np,)
+                w    = w_k_all[r, t_idx, :]
+
+                # Normalize weights for this (r, t)
+                w_sum = np.sum(w)
+                if (not np.isfinite(w_sum)) or (w_sum <= 0.0):
+                    w_norm = np.ones_like(w) / float(len(w))
+                else:
+                    w_norm = w / w_sum
+
+                devs_t_list.append(dev)
+                w_t_list.append(w_norm)
+
+            # Combine across runs at this time
+            devs_t = np.concatenate(devs_t_list)  # (R*Np,)
+            w_t    = np.concatenate(w_t_list)
+            w_t_sum = np.sum(w_t)
+            if (not np.isfinite(w_t_sum)) or (w_t_sum <= 0.0):
+                w_t = np.ones_like(w_t) / float(len(w_t))
+            else:
+                w_t = w_t / w_t_sum
+
+            # Weighted percentiles for dev = (true - estimate)
+            dev_lo, dev_hi = weighted_percentiles(
+                devs_t, w_t, percentiles=[p_low, p_high]
+            )
+            low_band[t_idx]  = dev_lo
+            high_band[t_idx] = dev_hi
+
+        # ----------------------------
+        # All run errors (estimate - truth) for plotting in black
+        # ----------------------------
+        err_runs = x_est_all[:, :, s_idx] - x_true_pf[:, :, s_idx]  # (R, T_pf)
+
+        # y-limits from both band and actual errors
+        all_vals = np.concatenate(
+            [err_runs.ravel(), low_band, high_band]
+        )
+        e_min = np.quantile(all_vals, 0.01)
+        e_max = np.quantile(all_vals, 0.99)
+        pad = 0.1 * (e_max - e_min + 1e-12)
+
+        # ----------------------------
+        # Final plot
+        # ----------------------------
+        plt.figure(figsize=(10, 5))
+
+        # Shaded 3-sigma band for (true - estimate) inferred from particles
+        # (centered around 0 in "expected error" space)
+        plt.fill_between(
+            t_pf, low_band, high_band,
+            color="C0", alpha=0.25,
+            label="3-sigma band (PF posterior error about estimate)"
+        )
+
+        # All run errors (estimate - truth) in black
+        for r in range(R):
+            plt.plot(
+                t_pf, err_runs[r, :],
+                color="black", alpha=0.4, linewidth=0.8
+            )
+
+        # Zero-error line (where we *hope* errors lie)
+        plt.axhline(
+            0.0, color="k", linestyle="--", linewidth=1.0
+        )
+
+        plt.ylim(e_min - pad, e_max + pad)
+        plt.xlabel("Time [s]")
+        plt.ylabel(f"{label} error")
+        plt.title(f"Error vs Time with PF PDF 3-sigma Band About Estimate — {label}")
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+
+        out_path = os.path.join(output_dir, f"state_{label}_error_band_about_est.jpg")
+        plt.savefig(out_path, dpi=dpi)
+        plt.close()
+
 
 # =========================
 # Main
@@ -513,10 +724,12 @@ def plot_pf_weight_pdfs_vs_time(
 if __name__ == "__main__":
 
     monte_data = generate_trajectories()
-    #plot_trajectories(monte_data, fig_num=1, save_as_png=False, dpi=300)
 
-    #monte_data = particle_filter.run_pf_for_all_runs(monte_data)
-
-    monte_data = firefly_pf.run_firefly_for_all_runs(monte_data, sim_hz)
-    plot_pf_state_errors_all_runs(monte_data)
-    #plot_pf_weight_pdfs_vs_time(monte_data, run_idx=0)
+    # ----- STANDARD PARTICLE FILTER ONLY -----
+    monte_data = particle_filter.run_pf_for_all_runs(monte_data)
+    # New “full PDF in error space” plots
+    plot_pf_error_pdf_band_all_runs_about_estimate(
+        monte_data,
+        state_labels=["x", "y", "z", "vx", "vy", "vz"],  # or whatever S is
+        output_dir="sim_results_error_band"
+    )   

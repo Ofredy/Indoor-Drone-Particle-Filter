@@ -6,7 +6,7 @@ from monte import sim_hz
 from system_model import *
 
 # Particle Filter Constants
-NUM_PARTICLES = 1000
+NUM_PARTICLES = 500
 PERCENT_EFFECTIVE = 0.2
 NUM_EFFECTIVE_THRESHOLD = int( NUM_PARTICLES * PERCENT_EFFECTIVE )
 
@@ -395,7 +395,7 @@ def weighted_median(values, weights):
     cdf = np.cumsum(weights) / np.sum(weights)
     return values[np.searchsorted(cdf, 0.5)]
 
-def plot_pred_update_step(truth_pos, x_pred, w_pred, x_post, w_post, step_idx=None):
+def plot_pred_update_step(truth_pos, x_pred, w_pred, x_post, w_post, beacons=BEACONS, step_idx=None):
     """
     Debug one PF step in 3D: compare prediction vs update and show beacons.
       truth_pos : (3,) true [x,y,z] at this time
@@ -446,7 +446,7 @@ def plot_pred_update_step(truth_pos, x_pred, w_pred, x_post, w_post, step_idx=No
 
     B = None
     if 'BEACONS' in globals():
-        B = np.asarray(BEACONS)
+        B = np.asarray(beacons)
         if B.ndim != 2 or B.shape[1] < 3:
             B = None
 

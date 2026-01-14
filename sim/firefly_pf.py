@@ -9,6 +9,7 @@ from system_model import *
 # Particle / swarm constants
 NUM_PARTICLES = 200
 DEBUG_FIREFLY_PLOTS = False
+DEBUG_CONVERGENCE_TIME = 0.0
 
 _rng = np.random.default_rng()
 vel_0_std = 0.1
@@ -22,10 +23,13 @@ PF_VEL_NOISE_STD = 0.00   # [m/s] small extra velocity noise per step
 VEL_DAMPING_1_PER_S = 0.9
 
 # Firefly Algorithm hyperparameters
-FIREFLY_BETA0  = 1.0    # can even bump a bit
-FIREFLY_GAMMA  = 0.1    # attraction decays faster with distance
-FIREFLY_ALPHA  = 0.1   # smaller random jiggle
-FIREFLY_ITERS  = 2      # fewer internal iterations
+FIREFLY_BETA0  = 1.0    # base attraction
+FIREFLY_GAMMA  = 0.1    # attraction decay with distance
+FIREFLY_ALPHA  = 0.1    # random jiggle scale
+FIREFLY_ITERS  = 5      # firefly iterations per update
+
+# Sliding-window length in measurement steps
+WINDOW_MEAS = 10
 
 # Soft-weighted state estimate temperature (bigger = smoother, smaller = peakier)
 SOFT_TEMP = 1.0
@@ -58,18 +62,20 @@ def firefly_pf_init():
 
     return x_0_all
 
+
 def prediction_step(x_k, u_k):
     """
+    Linear-Gaussian prediction step.
+
     x_k : (6, N) particle states [x, y, z, vx, vy, vz]
     u_k : (3,)   control acceleration input (already includes IMU noise)
     """
     # 1) Deterministic motion update from system model
-    x_pred = A @ x_k + (B @ u_k)[:, None]
+    x_pred = A_FIREFLY @ x_k + (B_FIREFLY @ u_k)[:, None]
 
-    dt = pf_dt
+    dt = firefly_pf_dt
 
     # 2) Velocity damping so they don't run away forever
-    #    v <- (1 - lambda*dt) * v  with lambda = VEL_DAMPING_1_PER_S
     vel_decay = max(0.0, 1.0 - VEL_DAMPING_1_PER_S * dt)
     x_pred[3:6, :] *= vel_decay
 
@@ -103,9 +109,10 @@ def prediction_step(x_k, u_k):
 
     return x_pred
 
-def firefly_update_step(sensor_measurement, x_k):
+
+def firefly_update_step(sensor_measurement, x_k, true_state):
     """
-    Firefly-algorithm-style update step.
+    Firefly-algorithm-style update step (proposal / movement).
 
     sensor_measurement : (M,)  vector of ranges (one per beacon)
     x_k                : (6, N) particles AFTER prediction
@@ -120,10 +127,10 @@ def firefly_update_step(sensor_measurement, x_k):
     N = pos.shape[1]
 
     # ----- 1) Compute cost J_i = sum_m (d_hat - z_m)^2 -----
-    diff = pos.T[None, :, :] - BEACONS[:, None, :]   # (M, N, 3)
-    d_hat = np.linalg.norm(diff, axis=2)             # (M, N)
-    resid = d_hat - sensor_measurement[:, None]      # (M, N)
-    J = np.sum(resid**2, axis=0)                     # (N,)
+    diff = pos.T[None, :, :] - FIREFLY_BEACONS[:, None, :]   # (M, N, 3)
+    d_hat = np.linalg.norm(diff, axis=2)                     # (M, N)
+    resid = d_hat - sensor_measurement[:, None]              # (M, N)
+    J = np.sum(resid**2, axis=0)                             # (N,)
 
     room_extent = np.array(
         [X_LIM[1] - X_LIM[0],
@@ -144,7 +151,7 @@ def firefly_update_step(sensor_measurement, x_k):
                     pos[:, i] = pos[:, i] + beta_ij * (pos[:, j] - pos[:, i]) + eps_vec
 
         # recompute cost after move
-        diff = pos.T[None, :, :] - BEACONS[:, None, :]
+        diff = pos.T[None, :, :] - FIREFLY_BEACONS[:, None, :]
         d_hat = np.linalg.norm(diff, axis=2)
         resid = d_hat - sensor_measurement[:, None]
         J = np.sum(resid**2, axis=0)
@@ -169,9 +176,12 @@ def firefly_update_step(sensor_measurement, x_k):
 
     return x_k_new
 
+
 def soft_weighted_estimate(x_k, sensor_measurement, tau=SOFT_TEMP):
     """
-    For single-beacon cases, returns the mode (most likely particle) instead of mean.
+    Single-step soft weighting:
+    - Computes cost J_i using only the *current* measurement
+    - Returns mode (most likely particle) and weights.
     """
     x_k = np.asarray(x_k, dtype=np.float64)
     sensor_measurement = np.asarray(sensor_measurement, dtype=np.float64)
@@ -179,7 +189,7 @@ def soft_weighted_estimate(x_k, sensor_measurement, tau=SOFT_TEMP):
     pos = x_k[0:3, :]
     N = pos.shape[1]
 
-    diff = pos.T[None, :, :] - BEACONS[:, None, :]
+    diff = pos.T[None, :, :] - FIREFLY_BEACONS[:, None, :]
     d_hat = np.linalg.norm(diff, axis=2)
     resid = d_hat - sensor_measurement[:, None]
     J = np.sum(resid**2, axis=0)
@@ -197,34 +207,81 @@ def soft_weighted_estimate(x_k, sensor_measurement, tau=SOFT_TEMP):
     else:
         w = w_unnorm / w_sum
 
-    # --- MODE instead of mean ---
+    # MODE instead of mean
     idx_mode = np.argmax(w)
     x_est = x_k[:, idx_mode]
 
     return x_est, w
 
+
+def sliding_soft_weighted_estimate(x_current, pos_hist, z_hist, tau=SOFT_TEMP):
+    """
+    Sliding-window version of the soft-weighted estimate.
+
+    x_current : (NUM_STATES, N)  particles at current PF step (time t)
+    pos_hist  : (L, 3, N)       particle positions over last L *measurement* steps
+    z_hist    : (L, M)          corresponding range measurements for each of those steps
+    tau       : temperature for soft weighting
+
+    Returns:
+        x_est : (NUM_STATES,)  estimated state at current time (mode)
+        w     : (N,)           normalized weights based on windowed cost
+    """
+    x_current = np.asarray(x_current, dtype=np.float64)
+    pos_hist  = np.asarray(pos_hist,  dtype=np.float64)
+    z_hist    = np.asarray(z_hist,    dtype=np.float64)
+
+    L, _, N = pos_hist.shape
+
+    # ---- Compute windowed cost J_i over measurement history ----
+    J = np.zeros(N, dtype=np.float64)
+
+    for ell in range(L):
+        # pos_hist[ell] : (3, N)
+        diff = pos_hist[ell].T[None, :, :] - FIREFLY_BEACONS[:, None, :]  # (M, N, 3)
+        d_hat = np.linalg.norm(diff, axis=2)                               # (M, N)
+        resid = d_hat - z_hist[ell][:, None]                               # (M, N)
+        J += np.sum(resid ** 2, axis=0)                                    # accumulate over window
+
+    # ---- Convert cost to weights (numerically stable) ----
+    J_min = np.min(J)
+    J_shift = J - J_min
+    if tau <= 0:
+        tau = 1e-6
+
+    w_unnorm = np.exp(-J_shift / tau)
+    w_sum = np.sum(w_unnorm)
+    if w_sum == 0.0:
+        w = np.full(N, 1.0 / N)
+    else:
+        w = w_unnorm / w_sum
+
+    # MODE at current time (use x_current, not historical states)
+    idx_mode = np.argmax(w)
+    x_est = x_current[:, idx_mode]
+
+    return x_est, w
+
+
 def brightest_particle_estimate(x_k, sensor_measurement):
     """
     State estimate = brightest particle = particle with minimum cost J.
-
-    x_k               : (6, N)
-    sensor_measurement: (M,)
-    Returns:
-        x_est : (6,)
+    (Not used in the main loop but kept as an alternative estimator.)
     """
     x_k = np.asarray(x_k, dtype=np.float64)
     sensor_measurement = np.asarray(sensor_measurement, dtype=np.float64)
 
-    pos = x_k[0:3, :]                # (3, N)
+    pos = x_k[0:3, :]
     N = pos.shape[1]
 
-    diff = pos.T[None, :, :] - BEACONS[:, None, :]   # (M, N, 3)
-    d_hat = np.linalg.norm(diff, axis=2)             # (M, N)
-    resid = d_hat - sensor_measurement[:, None]      # (M, N)
-    J = np.sum(resid**2, axis=0)                     # (N,)
+    diff = pos.T[None, :, :] - FIREFLY_BEACONS[:, None, :]
+    d_hat = np.linalg.norm(diff, axis=2)
+    resid = d_hat - sensor_measurement[:, None]
+    J = np.sum(resid**2, axis=0)
 
     idx_best = np.argmin(J)
     return x_k[:, idx_best]
+
 
 def run_firefly_for_all_runs(monte_data, sim_hz):
     """
@@ -237,30 +294,35 @@ def run_firefly_for_all_runs(monte_data, sim_hz):
     Adds to monte_data:
       'x_k'        : (R, T_pf, NUM_STATES, NUM_PARTICLES)
       'x_estimate' : (R, T_pf, NUM_STATES)
-      'w_k'        : weights for each PF step
+      'w_k'        : (R, T_pf, NUM_PARTICLES) weights for each PF step
     """
     S_all = monte_data['state_sum']   # (R, T_sim, 6)
     A_all = monte_data['acc_sum']     # (R, T_sim, 3)
     Runs, T_sim, _ = S_all.shape
 
     # PF update every 'step_div_imu' sim ticks
-    step_div_imu = int(sim_hz // imu_hz)
+    step_div_imu = int(sim_hz // firefly_imu_hz)
     if step_div_imu < 1:
-        raise ValueError("imu_hz must be <= sim_hz and yield an integer ratio.")
+        raise ValueError("firefly_imu_hz must be <= sim_hz and yield an integer ratio.")
 
     T_pf = 1 + (T_sim - 1) // step_div_imu   # include t=0
 
-    if ranging_hz <= 0:
-        raise ValueError("ranging_hz must be positive.")
+    if firefly_ranging_hz <= 0:
+        raise ValueError("firefly_ranging_hz must be positive.")
 
-    step_div_rng = int(round(sim_hz / ranging_hz))
-    if not np.isclose(sim_hz / ranging_hz, step_div_rng, atol=1e-6):
-        raise ValueError("ranging_hz must divide sim_hz evenly (can be fractional).")
+    step_div_rng = int(round(sim_hz / firefly_ranging_hz))
+    if not np.isclose(sim_hz / firefly_ranging_hz, step_div_rng, atol=1e-6):
+        raise ValueError("firefly_ranging_hz must divide sim_hz evenly (can be fractional).")
 
-    # Allocate
-    x_k_all = np.zeros((Runs, T_pf, NUM_STATES, NUM_PARTICLES))
-    w_k_all = np.full((Runs, T_pf, NUM_PARTICLES), 1.0 / NUM_PARTICLES)
+    # Number of beacons
+    M = len(FIREFLY_BEACONS)
+
+    # Allocate storage
+    x_k_all   = np.zeros((Runs, T_pf, NUM_STATES, NUM_PARTICLES))
+    w_k_all   = np.full((Runs, T_pf, NUM_PARTICLES), 1.0 / NUM_PARTICLES)
     x_est_all = np.zeros((Runs, T_pf, NUM_STATES))
+    # Measurement history: ranges at each PF step (NaN where no measurement)
+    z_k_all   = np.full((Runs, T_pf, M), np.nan)
 
     for r in range(Runs):
         print(f"firefly run: {r+1}/{Runs}")
@@ -268,13 +330,16 @@ def run_firefly_for_all_runs(monte_data, sim_hz):
         acc  = A_all[r]     # (T_sim, 3)
 
         # init (t = 0)
-        x_k_all[r, 0] = firefly_pf_init()
+        x_k_all[r, 0]   = firefly_pf_init()
         x_est_all[r, 0] = np.mean(x_k_all[r, 0], axis=1)
         pf_idx = 1
 
-        has_first_measurement = False  # <-- start plotting only after this flips
+        has_first_measurement = False  # plotting gate
 
         for s in range(1, T_sim):
+
+            t_pf = pf_idx * firefly_pf_dt
+
             # only update on IMU ticks
             if (s % step_div_imu) != 0:
                 continue
@@ -289,45 +354,73 @@ def run_firefly_for_all_runs(monte_data, sim_hz):
             )
             x_after_pred = x_k_all[r, pf_idx].copy()
 
-            # Range sensor measurement (to beacons) with noise
+            # Range sensor measurement (to FIREFLY_BEACONS) with noise
             if (s % step_div_rng) == 0:
                 from particle_filter import plot_pred_update_step
 
-                z = np.linalg.norm(traj[s, :3] - BEACONS, axis=1) + np.random.normal(
-                    0.0, np.sqrt(measurement_noise_variance), size=len(BEACONS)
+                true_state = traj[s, :3]
+
+                z = np.linalg.norm(traj[s, :3] - FIREFLY_BEACONS, axis=1) + np.random.normal(
+                    0.0, np.sqrt(measurement_noise_variance), size=len(FIREFLY_BEACONS)
                 )
+
+                # Save this measurement into history
+                z_k_all[r, pf_idx, :] = z
 
                 # ----- SAVE PRIOR (after prediction, before Firefly update) -----
                 x_prior = x_after_pred
                 w_prior = w_before
 
-                # ----- Firefly update (posterior) -----
+                # ----- Firefly update (posterior particles) -----
                 x_k_all[r, pf_idx] = firefly_update_step(
-                    z, x_k_all[r, pf_idx]
+                    z, x_k_all[r, pf_idx], true_state
                 )
                 x_post = x_k_all[r, pf_idx].copy()
 
-                # 🔥 Soft-weighted state estimate using Firefly costs
-                x_est, w_post = soft_weighted_estimate(x_post, z, tau=SOFT_TEMP)
+                # ----- Sliding-window state estimate using Firefly costs -----
+                # Find all PF indices up to current that have a measurement
+                meas_mask    = ~np.isnan(z_k_all[r, :pf_idx + 1, 0])
+                meas_indices = np.where(meas_mask)[0]
+
+                if meas_indices.size > 0:
+                    # Use the last WINDOW_MEAS measurement steps
+                    use_indices = meas_indices[-WINDOW_MEAS:]
+
+                    # Build position history: (L, 3, N)
+                    pos_hist = np.stack(
+                        [x_k_all[r, k_idx, 0:3, :] for k_idx in use_indices],
+                        axis=0
+                    )
+
+                    # Build measurement history: (L, M)
+                    z_hist = z_k_all[r, use_indices, :]
+
+                    x_est, w_post = sliding_soft_weighted_estimate(
+                        x_post, pos_hist, z_hist, tau=SOFT_TEMP
+                    )
+                else:
+                    # Fallback: single-measurement soft weighting (very early on)
+                    x_est, w_post = soft_weighted_estimate(x_post, z, tau=SOFT_TEMP)
+
                 x_est_all[r, pf_idx] = x_est
                 w_k_all[r, pf_idx]   = w_post
 
                 # ----- PLOT PRIOR vs POSTERIOR (measurement update) -----
-                if DEBUG_FIREFLY_PLOTS and has_first_measurement:
+                if DEBUG_FIREFLY_PLOTS and has_first_measurement and (t_pf >= DEBUG_CONVERGENCE_TIME):
                     _ = plot_pred_update_step(
                         truth_pos=traj[s, :3],
                         x_pred=x_prior,  w_pred=w_prior,
                         x_post=x_post,   w_post=w_post,
+                        beacons=FIREFLY_BEACONS,
                         step_idx=pf_idx
                     )
 
-                # mark that we've now had at least one measurement
                 has_first_measurement = True
 
             else:
                 # weighted prediction-only estimate (no new z)
                 w_prev = w_before
-                w_sum = np.sum(w_prev)
+                w_sum  = np.sum(w_prev)
                 if w_sum <= 0:
                     w_prev = np.full_like(w_prev, 1.0 / w_prev.size)
                 else:
@@ -337,12 +430,13 @@ def run_firefly_for_all_runs(monte_data, sim_hz):
                 w_k_all[r, pf_idx]   = w_prev
 
                 # ----- PLOT PREVIOUS vs PREDICTED (prediction-only step) -----
-                if DEBUG_FIREFLY_PLOTS and has_first_measurement:
+                if DEBUG_FIREFLY_PLOTS and has_first_measurement and (t_pf >= DEBUG_CONVERGENCE_TIME):
                     from particle_filter import plot_pred_update_step
                     _ = plot_pred_update_step(
                         truth_pos=traj[s, :3],
                         x_pred=x_before,      w_pred=w_before,
                         x_post=x_after_pred,  w_post=w_prev,
+                        beacons=FIREFLY_BEACONS,
                         step_idx=pf_idx
                     )
 
@@ -351,8 +445,7 @@ def run_firefly_for_all_runs(monte_data, sim_hz):
                 break
 
     # Stash results back
-    monte_data['x_k'] = x_k_all
-    monte_data['w_k'] = w_k_all
+    monte_data['x_k']        = x_k_all
+    monte_data['w_k']        = w_k_all
     monte_data['x_estimate'] = x_est_all
     return monte_data
-    
