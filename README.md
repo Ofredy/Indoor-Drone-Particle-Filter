@@ -40,21 +40,33 @@ With three beacons:
 - the particle filter converges quickly
 - and all state components converge reliably
 
-### Results
+### Three-Beacon Case Results — Geometry & Position Convergence
 
-From the repository root, results can be found at:
+The following trajectory plots illustrate the geometric constraints imposed by the three-beacon configuration and how the particle filter leverages this geometry to constrain and converge the state estimate.
 
-```
-sim/
-└── three_beacon_results/
-```
+#### Trajectory Visualization
 
-These results include:
-- State error plots for:
-  - position: \(x, y, z\)
-  - velocity: \(\dot{x}, \dot{y}, \dot{z}\)
+![3D Trajectory](sim/three_beacon_results/trajectory_plots/trajectory_3d.png)
 
-The three-beacon case demonstrates **stable and fast convergence**, validating the particle filter formulation and serving as a reference for reduced-beacon experiments.
+---
+
+### Position State Error
+
+The plots below show the position estimation error along each axis over time using the three-beacon configuration.
+
+#### X Position Error
+
+![X Position Error](sim/three_beacon_results/state_error_plots/x_position_error.png)
+
+#### Y Position Error
+
+![Y Position Error](sim/three_beacon_results/state_error_plots/y_position_error.png)
+
+#### Z Position Error
+
+![Z Position Error](sim/three_beacon_results/state_error_plots/z_position_error.png)
+
+These results demonstrate fast and stable convergence in all position states, validating the particle filter formulation and serving as a baseline for reduced-beacon experiments.
 
 ---
 
