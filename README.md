@@ -16,16 +16,14 @@ In particular, this work compares **three-beacon**, **two-beacon**, and **one-be
 ## Problem Setup & Motivation
 
 Indoor localization is challenging due to:
-- lack of GPS,
-- multipath effects,
-- constrained environments,
-- and limited sensing infrastructure.
+- lack of GPS
+- multipath effects
+- constrained environments
+- and limited sensing infrastructure
 
 In this project, the drone is assumed to be operating inside a **known, bounded indoor space**, and beacon-based range measurements are used as observations. A particle filter is used to estimate the full state:
 
-\[
-x = [x, y, z, \dot{x}, \dot{y}, \dot{z}]
-\]
+`x = [x, y, z, x_dot, y_dot, z_dot]`
 
 The key question explored is:
 
