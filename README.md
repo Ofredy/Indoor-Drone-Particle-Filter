@@ -46,7 +46,7 @@ The following trajectory plots illustrate the geometric constraints imposed by t
 
 #### Trajectory Visualization
 
-![3D Trajectory](sim/three_beacon_results/trajectory_plots/trajectory_3d.png)
+![3D Trajectory](sim/three_beacon_results/trajectory_plots/trajectories.png)
 
 ---
 
@@ -56,15 +56,15 @@ The plots below show the position estimation error along each axis over time usi
 
 #### X Position Error
 
-![X Position Error](sim/three_beacon_results/state_error_plots/x_position_error.png)
+![X Position Error](sim/three_beacon_results/state_error_plots/state_s0_errors.jpg)
 
 #### Y Position Error
 
-![Y Position Error](sim/three_beacon_results/state_error_plots/y_position_error.png)
+![Y Position Error](sim/three_beacon_results/state_error_plots/state_s1_errors.jpg)
 
 #### Z Position Error
 
-![Z Position Error](sim/three_beacon_results/state_error_plots/z_position_error.png)
+![Z Position Error](sim/three_beacon_results/state_error_plots/state_s2_errors.jpg)
 
 These results demonstrate fast and stable convergence in all position states, validating the particle filter formulation and serving as a baseline for reduced-beacon experiments.
 
