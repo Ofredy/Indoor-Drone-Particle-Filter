@@ -17,9 +17,9 @@ import firefly_pf
 np.random.seed(69)
 
 # Monte Carlo
-NUM_MONTE_RUNS = 10
+NUM_MONTE_RUNS = 50
 
-sim_time = 100.0 # seconds
+sim_time = 300.0 # seconds
 sim_hz = 200   # integrator rate (dt = 1/simulation_hz)
 sim_dt = 1 / sim_hz
 
@@ -723,13 +723,12 @@ def plot_pf_error_pdf_band_all_runs_about_estimate(
 # =========================
 if __name__ == "__main__":
 
+    # generating trajectories
     monte_data = generate_trajectories()
+
+    # plotting trajectories
+    plot_trajectories_monte(monte_data, BEACONS=BEACONS)
 
     # ----- STANDARD PARTICLE FILTER ONLY -----
     monte_data = particle_filter.run_pf_for_all_runs(monte_data)
-    # New “full PDF in error space” plots
-    plot_pf_error_pdf_band_all_runs_about_estimate(
-        monte_data,
-        state_labels=["x", "y", "z", "vx", "vy", "vz"],  # or whatever S is
-        output_dir="sim_results_error_band"
-    )   
+    plot_pf_state_errors_all_runs(monte_data)
