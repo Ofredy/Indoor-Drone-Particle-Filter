@@ -44,10 +44,10 @@ With three beacons:
 
 From the repository root, results can be found at:
 
-'''
+```
 sim/
 └── three_beacon_results/
-'''
+```
 
 These results include:
 - State error plots for:
